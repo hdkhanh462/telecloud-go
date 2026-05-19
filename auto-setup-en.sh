@@ -422,7 +422,6 @@ create_env() {
         PORT=${PORT:-8091}
 
         MASTER_KEY=$(gen_random_hex 32) || return 1
-        SETUP_TOKEN=$(gen_random_hex 16) || return 1
 
         cat > "$BASE_DIR/.env" <<EOF
 PORT=$PORT
@@ -430,9 +429,6 @@ LISTEN_ADDR=127.0.0.1
 
 # Master key to encrypt sessions and sensitive settings (Auto-generated if left blank)
 TELECLOUD_MASTER_KEY=$MASTER_KEY
-
-# One-time token to access the initial /setup page (Leave blank to disable setup gating)
-TELECLOUD_SETUP_TOKEN=$SETUP_TOKEN
 EOF
 
         if command -v ffmpeg &> /dev/null; then
@@ -463,8 +459,7 @@ EOF
         echo "    TELECLOUD_MASTER_KEY=$MASTER_KEY"
         echo "------------------------------------------------------------------"
         echo "🔑 Open in your browser:"
-        echo "    http://127.0.0.1:$PORT/setup?token=$SETUP_TOKEN"
-        echo "    (token is single-use until admin is created)"
+        echo "    http://127.0.0.1:$PORT/setup"
         echo "=================================================================="
         echo ""
     fi
@@ -518,7 +513,20 @@ create_run_scripts() {
                 || useradd --system --no-create-home --home-dir "$BASE_DIR" --shell /bin/false telecloud \
                 || echo "[!] Could not create 'telecloud' user — service will fall back to DynamicUser."
         fi
-        if getent passwd telecloud >/dev/null 2>&1; then
+
+        # Check if the installation folder is inside a root-restricted directory like /root
+        local use_root_service=0
+        if [[ "$BASE_DIR" == "/root"* ]]; then
+            use_root_service=1
+        fi
+
+        # Ensure data/log/temp of BASE_DIR belongs to user telecloud (if successfully created)
+        if [ $use_root_service -eq 1 ]; then
+            echo "[!] WARNING: Installation directory is inside /root."
+            echo "    To prevent systemd permission issues (CHDIR / Permission Denied),"
+            echo "    the service will run as User=root."
+            SERVICE_USER_LINES=$'User=root\nGroup=root'
+        elif getent passwd telecloud >/dev/null 2>&1; then
             chown -R telecloud:telecloud "$BASE_DIR" 2>/dev/null || true
             SERVICE_USER_LINES=$'User=telecloud\nGroup=telecloud'
         else
@@ -810,8 +818,12 @@ start_app() {
                 if journalctl -u telecloud.service --since "-1m" 2>/dev/null | grep -q "TeleCloud shut down"; then
                     success=2; break
                 fi
-                # 3. Check if service failed
-                if systemctl is-failed --quiet telecloud; then
+                # 3. Check if service is stuck in a crash loop or failed
+                local active_state=$(systemctl show -p ActiveState telecloud 2>/dev/null | cut -d'=' -f2)
+                local sub_state=$(systemctl show -p SubState telecloud 2>/dev/null | cut -d'=' -f2)
+                local n_restarts=$(systemctl show -p NRestarts telecloud 2>/dev/null | cut -d'=' -f2)
+
+                if [ "$sub_state" == "auto-restart" ] || { [ "$active_state" == "failed" ] && [ "$sub_state" == "failed" ]; } || { [ -n "$n_restarts" ] && [ "$n_restarts" -gt 2 ] && [ "$active_state" != "active" ]; }; then
                     success=3; break
                 fi
                 sleep 1
@@ -821,10 +833,13 @@ start_app() {
             if [ $success -eq 1 ]; then
                 echo "✅ TeleCloud started successfully!"
             elif [ $success -eq 2 ]; then
-                echo "❌ ERROR: TeleCloud has shut down. Please check the logs (Option 5)."
+                echo "❌ ERROR: TeleCloud has shut down. Error logs from systemd:"
+                journalctl -u telecloud.service -n 20 --no-pager
                 return 1
             elif [ $success -eq 3 ]; then
-                echo "❌ ERROR: TeleCloud failed to maintain an active state. Please check the logs (Option 5)."
+                echo "❌ ERROR: Service is stuck in a crash loop or has permission issues."
+                echo "[+] Error logs from systemd:"
+                journalctl -u telecloud.service -n 20 --no-pager
                 return 1
             else
                 echo "⚠️  WARNING: Wait time exceeded (30s). Status unconfirmed."

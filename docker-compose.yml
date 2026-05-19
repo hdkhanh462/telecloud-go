@@ -30,8 +30,6 @@ services:
       # generated and saved to /app/data/master.key inside the persistent volume.
       # Put it in .env or uncomment here. Losing it means losing access to encrypted secrets.
       # TELECLOUD_MASTER_KEY=
-      # Optional: One-time token to gate /setup against scanners until the admin account is created.
-      # TELECLOUD_SETUP_TOKEN=
     volumes:
       # Persist database, thumbnails, temp files, and Telegram session
       - ./data:/app/data

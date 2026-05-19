@@ -179,13 +179,8 @@ if not exist ".env" (
 
     :: Automatically generate random keys for Windows
     for /f "tokens=*" %%a in ('powershell -Command "[byte[]]$b = New-Object byte[] 32; [Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($b); [System.BitConverter]::ToString($b).Replace(\'-\', \'\').ToLower()"') do set "MASTER_KEY=%%a"
-    for /f "tokens=*" %%a in ('powershell -Command "[byte[]]$b = New-Object byte[] 16; [Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($b); [System.BitConverter]::ToString($b).Replace(\'-\', \'\').ToLower()"') do set "SETUP_TOKEN=%%a"
-
     if not "!MASTER_KEY!"=="" (
         powershell -Command "(Get-Content .env) -replace '^TELECLOUD_MASTER_KEY=.*', 'TELECLOUD_MASTER_KEY=!MASTER_KEY!' | Set-Content .env"
-    )
-    if not "!SETUP_TOKEN!"=="" (
-        powershell -Command "(Get-Content .env) -replace '^#?TELECLOUD_SETUP_TOKEN=.*', 'TELECLOUD_SETUP_TOKEN=!SETUP_TOKEN!' | Set-Content .env"
     )
 
     echo [v] Installation complete!
@@ -196,7 +191,7 @@ if not exist ".env" (
     echo     TELECLOUD_MASTER_KEY=!MASTER_KEY!
     echo ------------------------------------------------------------------
     echo [!] Please start TeleCloud (Option 3) then visit the setup link:
-    echo     http://127.0.0.1:8091/setup?token=!SETUP_TOKEN!
+    echo     http://127.0.0.1:8091/setup
     echo ==================================================================
     pause
     goto MENU

@@ -12,12 +12,8 @@ import (
 	"telecloud/database"
 )
 
-// PerformRestore restores database from an uploaded ZIP or DB file.
+// PerformRestore restores database and configurations from an uploaded ZIP or DB file.
 func PerformRestore(cfg *config.Config, uploadedPath string) error {
-	if !database.IsSQLite() {
-		return fmt.Errorf("restore is only supported for SQLite database")
-	}
-
 	tempDir := filepath.Join(cfg.TempDir, "restore_temp")
 	os.MkdirAll(tempDir, 0755)
 	defer os.RemoveAll(tempDir)
@@ -40,61 +36,12 @@ func PerformRestore(cfg *config.Config, uploadedPath string) error {
 		isZip = true
 	}
 
-	if isZip {
-		// Open ZIP archive
-		archive, err := zip.OpenReader(uploadedPath)
-		if err != nil {
-			return fmt.Errorf("failed to open zip archive: %w", err)
-		}
-		defer archive.Close()
-
-		dbFound := false
-		for _, file := range archive.File {
-			// Check for database.db
-			if file.Name == "database.db" || strings.HasSuffix(file.Name, "/database.db") {
-				dstFile, err := os.Create(tempDBPath)
-				if err != nil {
-					return fmt.Errorf("failed to create temp db file: %w", err)
-				}
-				srcFile, err := file.Open()
-				if err != nil {
-					dstFile.Close()
-					return fmt.Errorf("failed to open file in zip: %w", err)
-				}
-				_, err = io.Copy(dstFile, srcFile)
-				srcFile.Close()
-				dstFile.Close()
-				if err != nil {
-					return fmt.Errorf("failed to extract database.db: %w", err)
-				}
-				dbFound = true
-			}
-
-			// Check for master.key
-			if file.Name == "master.key" || strings.HasSuffix(file.Name, "/master.key") {
-				dstFile, err := os.Create(tempKeyPath)
-				if err != nil {
-					return fmt.Errorf("failed to create temp key file: %w", err)
-				}
-				srcFile, err := file.Open()
-				if err != nil {
-					dstFile.Close()
-					return fmt.Errorf("failed to open file in zip: %w", err)
-				}
-				_, err = io.Copy(dstFile, srcFile)
-				srcFile.Close()
-				dstFile.Close()
-				if err != nil {
-					return fmt.Errorf("failed to extract master.key: %w", err)
-				}
-			}
+	if !isZip {
+		// Treat directly as a .db file. This is only supported for SQLite databases.
+		if !database.IsSQLite() {
+			return fmt.Errorf("restoring raw DB file (.db, .sqlite) is not supported when using MySQL/Postgres. Please upload a ZIP backup")
 		}
 
-		if !dbFound {
-			return fmt.Errorf("invalid backup: 'database.db' not found in ZIP bundle")
-		}
-	} else {
-		// Treat directly as a .db file
 		srcFile, err := os.Open(uploadedPath)
 		if err != nil {
 			return fmt.Errorf("failed to open db file: %w", err)
@@ -111,57 +58,137 @@ func PerformRestore(cfg *config.Config, uploadedPath string) error {
 		if err != nil {
 			return fmt.Errorf("failed to copy database file: %w", err)
 		}
-	}
+	} else {
+		// Open ZIP archive
+		archive, err := zip.OpenReader(uploadedPath)
+		if err != nil {
+			return fmt.Errorf("failed to open zip archive: %w", err)
+		}
+		defer archive.Close()
 
-	// Verify database integrity
-	db, err := sql.Open("sqlite", tempDBPath)
-	if err != nil {
-		return fmt.Errorf("failed to open sqlite connection for validation: %w", err)
-	}
-	
-	// Check if settings table exists
-	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='settings'").Scan(&count)
-	db.Close() // close connection before moving/deleting files
-	if err != nil {
-		return fmt.Errorf("database validation failed: %w", err)
-	}
-	if count == 0 {
-		return fmt.Errorf("invalid backup: 'settings' table not found. Please upload a valid TeleCloud backup")
-	}
+		dbFound := false
+		keyFound := false
+		thumbsFound := false
 
-	// Safe to restore! Close active DB
-	err = database.CloseDB()
-	if err != nil {
-		return fmt.Errorf("failed to close active database connections: %w", err)
-	}
+		for _, file := range archive.File {
+			// 1. Extract database.db (only used/required if IsSQLite)
+			if file.Name == "database.db" || strings.HasSuffix(file.Name, "/database.db") {
+				if database.IsSQLite() {
+					dstFile, err := os.Create(tempDBPath)
+					if err != nil {
+						return fmt.Errorf("failed to create temp db file: %w", err)
+					}
+					srcFile, err := file.Open()
+					if err != nil {
+						dstFile.Close()
+						return fmt.Errorf("failed to open file in zip: %w", err)
+					}
+					_, err = io.Copy(dstFile, srcFile)
+					srcFile.Close()
+					dstFile.Close()
+					if err != nil {
+						return fmt.Errorf("failed to extract database.db: %w", err)
+					}
+					dbFound = true
+				}
+			}
 
-	// Remove old wal and shm files to avoid SQLite WAL corruption/recovery failure
-	os.Remove(cfg.DatabasePath + "-wal")
-	os.Remove(cfg.DatabasePath + "-shm")
+			// 2. Extract master.key
+			if file.Name == "master.key" || strings.HasSuffix(file.Name, "/master.key") {
+				dstFile, err := os.Create(tempKeyPath)
+				if err != nil {
+					return fmt.Errorf("failed to create temp key file: %w", err)
+				}
+				srcFile, err := file.Open()
+				if err != nil {
+					dstFile.Close()
+					return fmt.Errorf("failed to open file in zip: %w", err)
+				}
+				_, err = io.Copy(dstFile, srcFile)
+				srcFile.Close()
+				dstFile.Close()
+				if err != nil {
+					return fmt.Errorf("failed to extract master.key: %w", err)
+				}
+				keyFound = true
+			}
 
-	// Overwrite active database file
-	err = copyFile(tempDBPath, cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("failed to replace database.db: %w", err)
-	}
+			// 3. Extract thumbnails
+			if strings.HasPrefix(file.Name, "thumbnails/") {
+				relPath := strings.TrimPrefix(file.Name, "thumbnails/")
+				if relPath != "" {
+					destPath := filepath.Join(cfg.ThumbsDir, relPath)
+					// Ensure parent directory exists
+					os.MkdirAll(filepath.Dir(destPath), 0755)
 
-	// If there's a new master.key, overwrite it
-	if _, err := os.Stat(tempKeyPath); err == nil {
-		keyFile := ""
-		if _, err := os.Stat("/app/data"); err == nil {
-			keyFile = "/app/data/master.key"
-		} else if _, err := os.Stat("data"); err == nil {
-			keyFile = filepath.Join("data", "master.key")
-		} else {
-			dbPath := strings.TrimSpace(os.Getenv("DATABASE_PATH"))
-			if dbPath != "" {
-				keyFile = filepath.Join(filepath.Dir(dbPath), "master.key")
-			} else {
-				keyFile = filepath.Join("data", "master.key")
+					dstFile, err := os.Create(destPath)
+					if err != nil {
+						return fmt.Errorf("failed to create thumbnail file: %w", err)
+					}
+					srcFile, err := file.Open()
+					if err != nil {
+						dstFile.Close()
+						return fmt.Errorf("failed to open thumbnail file in zip: %w", err)
+					}
+					_, err = io.Copy(dstFile, srcFile)
+					srcFile.Close()
+					dstFile.Close()
+					if err != nil {
+						return fmt.Errorf("failed to extract thumbnail file: %w", err)
+					}
+					thumbsFound = true
+				}
 			}
 		}
 
+		if database.IsSQLite() && !dbFound {
+			return fmt.Errorf("invalid backup: 'database.db' not found in ZIP bundle")
+		}
+
+		if !database.IsSQLite() && !keyFound && !thumbsFound {
+			return fmt.Errorf("invalid backup: no master.key or thumbnails found in ZIP bundle")
+		}
+	}
+
+	// For SQLite, perform database replacement
+	if database.IsSQLite() {
+		// Verify database integrity
+		db, err := sql.Open("sqlite", tempDBPath)
+		if err != nil {
+			return fmt.Errorf("failed to open sqlite connection for validation: %w", err)
+		}
+		
+		// Check if settings table exists
+		var count int
+		err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='settings'").Scan(&count)
+		db.Close() // close connection before moving/deleting files
+		if err != nil {
+			return fmt.Errorf("database validation failed: %w", err)
+		}
+		if count == 0 {
+			return fmt.Errorf("invalid backup: 'settings' table not found. Please upload a valid TeleCloud backup")
+		}
+
+		// Safe to restore! Close active DB
+		err = database.CloseDB()
+		if err != nil {
+			return fmt.Errorf("failed to close active database connections: %w", err)
+		}
+
+		// Remove old wal and shm files to avoid SQLite WAL corruption/recovery failure
+		os.Remove(cfg.DatabasePath + "-wal")
+		os.Remove(cfg.DatabasePath + "-shm")
+
+		// Overwrite active database file
+		err = copyFile(tempDBPath, cfg.DatabasePath)
+		if err != nil {
+			return fmt.Errorf("failed to replace database.db: %w", err)
+		}
+	}
+
+	// Overwrite master.key if a new one was found in the ZIP
+	if _, err := os.Stat(tempKeyPath); err == nil {
+		keyFile := resolveKeyFilePath()
 		if keyFile != "" {
 			// Overwrite existing master key file
 			os.MkdirAll(filepath.Dir(keyFile), 0755)
@@ -173,4 +200,18 @@ func PerformRestore(cfg *config.Config, uploadedPath string) error {
 	}
 
 	return nil
+}
+
+func resolveKeyFilePath() string {
+	if _, err := os.Stat("/app/data"); err == nil {
+		return "/app/data/master.key"
+	}
+	if _, err := os.Stat("data"); err == nil {
+		return "data/master.key"
+	}
+	dbPath := strings.TrimSpace(os.Getenv("DATABASE_PATH"))
+	if dbPath != "" {
+		return filepath.Join(filepath.Dir(dbPath), "master.key")
+	}
+	return "data/master.key"
 }

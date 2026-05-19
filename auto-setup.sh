@@ -422,7 +422,6 @@ create_env() {
         PORT=${PORT:-8091}
 
         MASTER_KEY=$(gen_random_hex 32) || return 1
-        SETUP_TOKEN=$(gen_random_hex 16) || return 1
 
         cat > "$BASE_DIR/.env" <<EOF
 PORT=$PORT
@@ -430,9 +429,6 @@ LISTEN_ADDR=127.0.0.1
 
 # Khóa master mã hóa session và settings nhạy cảm (Tự động sinh nếu để trống)
 TELECLOUD_MASTER_KEY=$MASTER_KEY
-
-# Token một lần truy cập trang /setup ban đầu (Để trống nếu muốn tắt bảo vệ)
-TELECLOUD_SETUP_TOKEN=$SETUP_TOKEN
 EOF
 
         if command -v ffmpeg &> /dev/null; then
@@ -462,8 +458,7 @@ EOF
         echo "    TELECLOUD_MASTER_KEY=$MASTER_KEY"
         echo "------------------------------------------------------------------"
         echo "🔑 Mở trình duyệt tại:"
-        echo "    http://127.0.0.1:$PORT/setup?token=$SETUP_TOKEN"
-        echo "    (token chỉ dùng 1 lần cho đến khi admin được tạo)"
+        echo "    http://127.0.0.1:$PORT/setup"
         echo "=================================================================="
         echo ""
     fi
@@ -517,8 +512,20 @@ create_run_scripts() {
                 || useradd --system --no-create-home --home-dir "$BASE_DIR" --shell /bin/false telecloud \
                 || echo "[!] Không tạo được user 'telecloud' — service sẽ chạy với DynamicUser."
         fi
+
+        # Kiểm tra xem thư mục cài đặt có nằm trong thư mục hạn chế truy cập như /root không
+        local use_root_service=0
+        if [[ "$BASE_DIR" == "/root"* ]]; then
+            use_root_service=1
+        fi
+
         # Đảm bảo data/log/temp của BASE_DIR thuộc về user telecloud (nếu tạo thành công)
-        if getent passwd telecloud >/dev/null 2>&1; then
+        if [ $use_root_service -eq 1 ]; then
+            echo "[!] CẢNH BÁO: Thư mục cài đặt nằm trong /root."
+            echo "    Để tránh lỗi phân quyền (CHDIR / Permission Denied) của systemd,"
+            echo "    dịch vụ sẽ được chạy với quyền User=root."
+            SERVICE_USER_LINES=$'User=root\nGroup=root'
+        elif getent passwd telecloud >/dev/null 2>&1; then
             chown -R telecloud:telecloud "$BASE_DIR" 2>/dev/null || true
             SERVICE_USER_LINES=$'User=telecloud\nGroup=telecloud'
         else
@@ -811,8 +818,12 @@ start_app() {
                 if journalctl -u telecloud.service --since "-1m" 2>/dev/null | grep -q "TeleCloud shut down"; then
                     success=2; break
                 fi
-                # 3. Kiểm tra nếu service bị failed hẳn
-                if systemctl is-failed --quiet telecloud; then
+                # 3. Kiểm tra nếu service bị lỗi khởi động lặp (auto-restart) hoặc failed hẳn
+                local active_state=$(systemctl show -p ActiveState telecloud 2>/dev/null | cut -d'=' -f2)
+                local sub_state=$(systemctl show -p SubState telecloud 2>/dev/null | cut -d'=' -f2)
+                local n_restarts=$(systemctl show -p NRestarts telecloud 2>/dev/null | cut -d'=' -f2)
+
+                if [ "$sub_state" == "auto-restart" ] || { [ "$active_state" == "failed" ] && [ "$sub_state" == "failed" ]; } || { [ -n "$n_restarts" ] && [ "$n_restarts" -gt 2 ] && [ "$active_state" != "active" ]; }; then
                     success=3; break
                 fi
                 sleep 1
@@ -822,10 +833,13 @@ start_app() {
             if [ $success -eq 1 ]; then
                 echo "✅ TeleCloud đã khởi động thành công!"
             elif [ $success -eq 2 ]; then
-                echo "❌ LỖI: TeleCloud đã tự đóng (shut down). Vui lòng kiểm tra log (Mục 6)."
+                echo "❌ LỖI: TeleCloud đã tự đóng (shut down). Chi tiết nhật ký lỗi từ systemd:"
+                journalctl -u telecloud.service -n 20 --no-pager
                 return 1
             elif [ $success -eq 3 ]; then
-                echo "❌ LỖI: TeleCloud không thể duy trì trạng thái hoạt động. Vui lòng kiểm tra log (Mục 6)."
+                echo "❌ LỖI: Dịch vụ bị lỗi khởi động lặp (Crash Loop) hoặc lỗi phân quyền."
+                echo "[+] Chi tiết nhật ký lỗi từ systemd:"
+                journalctl -u telecloud.service -n 20 --no-pager
                 return 1
             else
                 echo "⚠️  CẢNH BÁO: Quá thời gian chờ (30s) nhưng chưa xác nhận được trạng thái."

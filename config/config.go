@@ -38,7 +38,6 @@ type Config struct {
 	TorrentEnabled   bool
 	TorrentPath      string
 	ListenAddr       string
-	SetupToken       string
 }
 
 func Load() (*Config, error) {
@@ -123,7 +122,6 @@ func Load() (*Config, error) {
 		TorrentEnabled:   torrentEnabled,
 		TorrentPath:      torrentPath,
 		ListenAddr:       getEnv("LISTEN_ADDR", ""),
-		SetupToken:       os.Getenv("TELECLOUD_SETUP_TOKEN"),
 	}, nil
 }
 

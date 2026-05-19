@@ -228,21 +228,9 @@ func zipBackupBundle(dbPath, thumbsDir, targetZip string) error {
 	}
 
 	// 1b. Add master.key if it exists (for auto-generated keys)
-	keyFile := ""
-	if _, err := os.Stat("/app/data/master.key"); err == nil {
-		keyFile = "/app/data/master.key"
-	} else if _, err := os.Stat("data/master.key"); err == nil {
-		keyFile = "data/master.key"
-	} else if _, err := os.Stat("master.key"); err == nil {
-		keyFile = "master.key"
-	} else {
-		dbPathEnv := strings.TrimSpace(os.Getenv("DATABASE_PATH"))
-		if dbPathEnv != "" {
-			testFile := filepath.Join(filepath.Dir(dbPathEnv), "master.key")
-			if _, err := os.Stat(testFile); err == nil {
-				keyFile = testFile
-			}
-		}
+	keyFile := resolveKeyFilePath()
+	if _, err := os.Stat(keyFile); err != nil {
+		keyFile = ""
 	}
 
 	if keyFile != "" {

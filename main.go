@@ -79,7 +79,7 @@ func restartApp() {
 }
 
 var (
-	version = "v3.5.0"
+	version = "v3.5.1"
 	commit  = "none"
 	date    = "unknown"
 )
@@ -247,14 +247,11 @@ func main() {
 		if setupHost == "0.0.0.0" || setupHost == "::" {
 			setupHost = "YOUR_IP_OR_DOMAIN"
 		}
-		tokenSuffix := ""
-		if cfg.SetupToken != "" {
-			tokenSuffix = "?token=" + cfg.SetupToken
-		}
-		setupURL := fmt.Sprintf("http://%s:%s/setup%s", setupHost, cfg.Port, tokenSuffix)
+		setupURL := fmt.Sprintf("http://%s:%s/setup", setupHost, cfg.Port)
 		log.Printf("Setup is incomplete. Starting in Setup Mode. Please visit: %s", setupURL)
 		log.Println("Starting TeleCloud on port " + cfg.Port + "...")
 	} else {
+
 		startTG(cfg)
 	}
 

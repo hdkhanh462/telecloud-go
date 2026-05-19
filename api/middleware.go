@@ -80,42 +80,6 @@ func csrfMiddleware() gin.HandlerFunc {
 	}
 }
 
-// verifySetupToken returns true if the request carries a setup token matching
-// the expected value, either via the X-Setup-Token header, ?token=, or a
-// previously issued "setup_token_ok" cookie that proves a prior valid match.
-func verifySetupToken(c *gin.Context, expected string) bool {
-	if expected == "" {
-		return true
-	}
-	if cookie, err := c.Cookie("setup_token_ok"); err == nil && cookie == expected {
-		return true
-	}
-	header := c.GetHeader("X-Setup-Token")
-	if header == "" {
-		header = c.Query("token")
-	}
-	if header == "" {
-		return false
-	}
-	if subtleCompare(header, expected) {
-		// Persist for the rest of the wizard so the operator does not have to
-		// echo the token on every request.
-		c.SetCookie("setup_token_ok", expected, 3600, "/", "", isSecure(), true)
-		return true
-	}
-	return false
-}
-
-func subtleCompare(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var v byte
-	for i := 0; i < len(a); i++ {
-		v |= a[i] ^ b[i]
-	}
-	return v == 0
-}
 
 // buildCSP returns a Content-Security-Policy whose third-party allow-lists
 // follow runtime settings. Cloudflare Web Analytics (cloudflareinsights.com)
@@ -159,10 +123,7 @@ func securityHeadersMiddleware() gin.HandlerFunc {
 }
 
 // setupCheckMiddleware checks if the system needs initial configuration.
-// When initial setup has not been performed (admin_username unset), it also
-// enforces TELECLOUD_SETUP_TOKEN if the env var is set, to stop a bot/scanner
-// from grabbing /setup before the operator finishes the wizard.
-func setupCheckMiddleware(setupToken string) gin.HandlerFunc {
+func setupCheckMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		adminUser := database.GetSetting("admin_username")
@@ -176,15 +137,6 @@ func setupCheckMiddleware(setupToken string) gin.HandlerFunc {
 		// If setup not finished, redirect all non-setup pages to /setup
 		if adminUser == "" {
 			if strings.HasPrefix(path, "/setup") || strings.HasPrefix(path, "/api/setup") {
-				if setupToken != "" && !verifySetupToken(c, setupToken) {
-					if strings.HasPrefix(path, "/api/") {
-						c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "setup_token_required"})
-					} else {
-						c.String(http.StatusForbidden, "Missing or invalid setup token. Open /setup?token=<TELECLOUD_SETUP_TOKEN>.")
-						c.Abort()
-					}
-					return
-				}
 				c.Next()
 				return
 			}
