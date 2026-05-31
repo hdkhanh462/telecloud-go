@@ -45,20 +45,21 @@ type cachedLocation struct {
 }
 
 type tgFileReader struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	api         *tg.Client
-	loc         tg.InputFileLocationClass
-	size        int64
-	offset      int64
-	chunkOffset int64
-	chunkData   []byte
+	ctx    context.Context
+	cancel context.CancelFunc
+	api    *tg.Client
+	loc    tg.InputFileLocationClass
+	size   int64
+	offset int64
 
-	// Prefetching
-	nextChunkData   []byte
-	nextChunkOffset int64
-	prefetchErr     error
-	prefetchMu      sync.Mutex
+	// Current chunk (served synchronously)
+	chunkData   []byte
+	chunkOffset int64
+
+	// Prefetch buffer
+	prefetchChunks map[int64][]byte // offset → prefetched chunk data
+	prefetchMu     sync.Mutex
+	prefetchSem    chan struct{} // capacity 1: ensures only one prefetch goroutine at a time
 }
 
 func (r *tgFileReader) Close() error {
@@ -73,32 +74,23 @@ func (r *tgFileReader) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 
-	// 1MB chunks — max supported by Telegram UploadGetFile
 	const chunkSize = int64(1024 * 1024)
 
-	// If we have no data or the current offset is outside our cached chunk
+	// If we have no data or the current offset is outside our cached chunk, load it
 	if r.chunkData == nil || r.offset < r.chunkOffset || r.offset >= r.chunkOffset+int64(len(r.chunkData)) {
-		// Check if we have the data in our prefetch buffer
+		chunkStart := (r.offset / chunkSize) * chunkSize
+
+		// Try to get the chunk from the prefetch buffer
 		r.prefetchMu.Lock()
-		if r.nextChunkData != nil && r.offset >= r.nextChunkOffset && r.offset < r.nextChunkOffset+int64(len(r.nextChunkData)) {
-			r.chunkData = r.nextChunkData
-			r.chunkOffset = r.nextChunkOffset
-			r.nextChunkData = nil
-			r.prefetchErr = nil
+		if data, ok := r.prefetchChunks[chunkStart]; ok {
+			r.chunkData = data
+			r.chunkOffset = chunkStart
+			delete(r.prefetchChunks, chunkStart)
 			r.prefetchMu.Unlock()
 		} else {
-			// If prefetch errored out, return that error
-			if r.prefetchErr != nil {
-				err := r.prefetchErr
-				r.prefetchErr = nil
-				r.prefetchMu.Unlock()
-				return 0, err
-			}
 			r.prefetchMu.Unlock()
-
-			// Otherwise, fetch manually (cold start or seek)
-			chunkStart := (r.offset / chunkSize) * chunkSize
-			data, err := r.fetchChunk(chunkStart, chunkSize)
+			// Fallback: synchronous fetch with retries
+			data, err := r.fetchChunk(r.api, chunkStart, chunkSize)
 			if err != nil {
 				return 0, err
 			}
@@ -107,18 +99,60 @@ func (r *tgFileReader) Read(p []byte) (int, error) {
 		}
 	}
 
-	// After ensuring we have chunkData, trigger prefetch for the NEXT chunk if we are near the end of current chunk
+	// Copy data to caller's buffer
 	inChunkOffset := r.offset - r.chunkOffset
+	n := copy(p, r.chunkData[inChunkOffset:])
+	r.offset += int64(n)
+
+	// Trigger prefetch for the NEXT chunk when we reach the midpoint of current chunk.
+	// Uses a different bot than the sync fallback to spread rate-limit across sessions.
 	if inChunkOffset >= int64(len(r.chunkData))/2 {
 		r.triggerPrefetch(r.chunkOffset+chunkSize, chunkSize)
 	}
 
-	n := copy(p, r.chunkData[inChunkOffset:])
-	r.offset += int64(n)
 	return n, nil
 }
 
-func (r *tgFileReader) fetchChunk(offset int64, limit int64) ([]byte, error) {
+// triggerPrefetch launches a single background goroutine to fetch the next chunk
+// using a different bot than the synchronous fallback path. This spreads the
+// Telegram rate-limit across sessions without overwhelming a single DC.
+func (r *tgFileReader) triggerPrefetch(offset int64, limit int64) {
+	if offset >= r.size {
+		return
+	}
+
+	r.prefetchMu.Lock()
+	// Already prefetched or being prefetched
+	if _, exists := r.prefetchChunks[offset]; exists {
+		r.prefetchMu.Unlock()
+		return
+	}
+	r.prefetchMu.Unlock()
+
+	// Non-blocking: if a prefetch is already running, skip
+	select {
+	case r.prefetchSem <- struct{}{}:
+	default:
+		return
+	}
+
+	go func() {
+		defer func() { <-r.prefetchSem }()
+
+		// Use a different bot than the one used for sync fallback
+		fetchAPI := GetAPI()
+		data, err := r.fetchChunk(fetchAPI, offset, limit)
+		if err != nil {
+			return
+		}
+
+		r.prefetchMu.Lock()
+		r.prefetchChunks[offset] = data
+		r.prefetchMu.Unlock()
+	}()
+}
+
+func (r *tgFileReader) fetchChunk(api *tg.Client, offset int64, limit int64) ([]byte, error) {
 	req := &tg.UploadGetFileRequest{
 		Precise:  true,
 		Location: r.loc,
@@ -129,7 +163,7 @@ func (r *tgFileReader) fetchChunk(offset int64, limit int64) ([]byte, error) {
 	var res tg.UploadFileClass
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		res, err = r.api.UploadGetFile(r.ctx, req)
+		res, err = api.UploadGetFile(r.ctx, req)
 		if err == nil {
 			break
 		}
@@ -177,38 +211,6 @@ func (r *tgFileReader) fetchChunk(offset int64, limit int64) ([]byte, error) {
 	}
 }
 
-func (r *tgFileReader) triggerPrefetch(offset int64, limit int64) {
-	if offset >= r.size {
-		return
-	}
-
-	r.prefetchMu.Lock()
-	if r.nextChunkData != nil && r.nextChunkOffset == offset {
-		r.prefetchMu.Unlock()
-		return
-	}
-	// If already prefetching this offset, do nothing
-	if r.nextChunkOffset == offset {
-		r.prefetchMu.Unlock()
-		return
-	}
-
-	r.nextChunkData = nil
-	r.nextChunkOffset = offset
-	r.prefetchErr = nil
-	r.prefetchMu.Unlock()
-
-	go func() {
-		data, err := r.fetchChunk(offset, limit)
-		r.prefetchMu.Lock()
-		if r.nextChunkOffset == offset { // Ensure we haven't seeked away
-			r.nextChunkData = data
-			r.prefetchErr = err
-		}
-		r.prefetchMu.Unlock()
-	}()
-}
-
 func (r *tgFileReader) Seek(offset int64, whence int) (int64, error) {
 	var newOffset int64
 	switch whence {
@@ -225,7 +227,15 @@ func (r *tgFileReader) Seek(offset int64, whence int) (int64, error) {
 	if newOffset > r.size {
 		newOffset = r.size
 	}
-	r.offset = newOffset
+	if newOffset != r.offset {
+		r.offset = newOffset
+		// Invalidate prefetch buffer and current chunk on seek
+		r.prefetchMu.Lock()
+		r.prefetchChunks = make(map[int64][]byte)
+		r.prefetchMu.Unlock()
+		r.chunkData = nil
+		r.chunkOffset = 0
+	}
 	return r.offset, nil
 }
 
@@ -306,11 +316,13 @@ var getSinglePartReader = func(ctx context.Context, msgID int, size int64, cfg *
 
 	if ok && time.Now().Before(cached.expiresAt) {
 		return &tgFileReader{
-			ctx:    ctx,
-			cancel: cancel,
-			api:    cached.api, // Reuse the same API client that resolved this location
-			loc:    cached.loc,
-			size:   size,
+			ctx:            ctx,
+			cancel:         cancel,
+			api:            cached.api,
+			loc:            cached.loc,
+			size:           size,
+			prefetchChunks: make(map[int64][]byte),
+			prefetchSem:    make(chan struct{}, 1),
 		}, nil
 	}
 
@@ -457,11 +469,13 @@ var getSinglePartReader = func(ctx context.Context, msgID int, size int64, cfg *
 	cacheMutex.Unlock()
 
 	reader := &tgFileReader{
-		ctx:    ctx,
-		cancel: cancel,
-		api:    api,
-		loc:    loc,
-		size:   size,
+		ctx:            ctx,
+		cancel:         cancel,
+		api:            api,
+		loc:            loc,
+		size:           size,
+		prefetchChunks: make(map[int64][]byte),
+		prefetchSem:    make(chan struct{}, 1),
 	}
 
 	return reader, nil
@@ -475,13 +489,22 @@ type multiPartReader struct {
 	offset int64
 	cfg    *config.Config
 
-	currentReader io.ReadSeekCloser
-	currentIndex  int
+	currentReader       io.ReadSeekCloser
+	currentIndex        int
+	currentPartRemaining int64 // bytes left in current part before EOF
+
+	// Pre-initialized next part reader (avoids gap between parts)
+	nextReader     io.ReadSeekCloser
+	nextPartIndex  int
+	nextInitialized bool
 }
 
 func (r *multiPartReader) Close() error {
 	if r.currentReader != nil {
 		r.currentReader.Close()
+	}
+	if r.nextReader != nil {
+		r.nextReader.Close()
 	}
 	if r.cancel != nil {
 		r.cancel()
@@ -496,41 +519,72 @@ func (r *multiPartReader) Read(p []byte) (int, error) {
 
 	for {
 		if r.currentReader == nil {
-			// Find which part contains the current offset
-			var partStart int64
-			found := false
-			for i, p := range r.parts {
-				if r.offset < partStart+p.Size {
-					r.currentIndex = i
-					reader, err := getSinglePartReader(r.ctx, p.MessageID, p.Size, r.cfg)
-					if err != nil {
-						return 0, err
+			// Use pre-initialized nextReader if available and matches
+			if r.nextReader != nil && r.nextPartIndex == r.currentIndex {
+				r.currentReader = r.nextReader
+				r.nextReader = nil
+				r.nextInitialized = false
+				r.currentPartRemaining = r.parts[r.currentIndex].Size
+			} else {
+				// Find which part contains the current offset
+				var partStart int64
+				found := false
+				for i, part := range r.parts {
+					if r.offset < partStart+part.Size {
+						r.currentIndex = i
+						reader, err := getSinglePartReader(r.ctx, part.MessageID, part.Size, r.cfg)
+						if err != nil {
+							return 0, err
+						}
+						relOffset := r.offset - partStart
+						if relOffset > 0 {
+							if _, err = reader.Seek(relOffset, io.SeekStart); err != nil {
+								return 0, err
+							}
+						}
+						r.currentReader = reader
+						r.currentPartRemaining = part.Size - relOffset
+						r.nextInitialized = false
+						found = true
+						break
 					}
-					// Seek to the relative offset within this part
-					_, err = reader.Seek(r.offset-partStart, io.SeekStart)
-					if err != nil {
-						return 0, err
-					}
-					r.currentReader = reader
-					found = true
-					break
+					partStart += part.Size
 				}
-				partStart += p.Size
-			}
-			if !found {
-				return 0, io.EOF
+				if !found {
+					return 0, io.EOF
+				}
 			}
 		}
 
 		n, err := r.currentReader.Read(p)
 		if n > 0 {
 			r.offset += int64(n)
+			r.currentPartRemaining -= int64(n)
+
+			// Pre-initialize next part reader when approaching end of current part.
+			// This eliminates the gap between parts by resolving the next message
+			// location and prefetching its first chunk while we still have data to serve.
+			const prefetchThreshold = int64(2 * 1024 * 1024) // 2MB
+			nextIdx := r.currentIndex + 1
+			if !r.nextInitialized && r.currentPartRemaining <= prefetchThreshold && nextIdx < len(r.parts) {
+				r.nextInitialized = true
+				r.nextPartIndex = nextIdx
+				nextPart := r.parts[nextIdx]
+				go func() {
+					reader, err := getSinglePartReader(r.ctx, nextPart.MessageID, nextPart.Size, r.cfg)
+					if err == nil {
+						r.nextReader = reader
+					}
+				}()
+			}
+
 			return n, nil
 		}
 		if err == io.EOF {
 			r.currentReader.Close()
 			r.currentReader = nil
 			r.currentIndex++
+			r.currentPartRemaining = 0
 			if r.currentIndex >= len(r.parts) {
 				return 0, io.EOF
 			}
@@ -563,6 +617,11 @@ func (r *multiPartReader) Seek(offset int64, whence int) (int64, error) {
 		if r.currentReader != nil {
 			r.currentReader.Close()
 			r.currentReader = nil
+		}
+		if r.nextReader != nil {
+			r.nextReader.Close()
+			r.nextReader = nil
+			r.nextInitialized = false
 		}
 	}
 	return r.offset, nil
