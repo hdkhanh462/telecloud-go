@@ -852,7 +852,7 @@ func backfillOwners() error {
 		if _, err := DB.Exec(fmt.Sprintf("%s files SET owner = ? WHERE (path = ? OR path LIKE ?) AND (owner IS NULL OR owner = '')", updateCmd), u, prefix, prefix+"/%"); err != nil {
 			return fmt.Errorf("failed to backfill owner for user %s path: %v", u, err)
 		}
-		if _, err := DB.Exec(fmt.Sprintf("%s files SET owner = ? WHERE path = '/' AND filename = ? AND is_folder = 1 AND (owner IS NULL OR owner = '')", updateCmd), u, u); err != nil {
+		if _, err := DB.Exec(fmt.Sprintf("%s files SET owner = ? WHERE path = '/' AND filename = ? AND is_folder = true AND (owner IS NULL OR owner = '')", updateCmd), u, u); err != nil {
 			return fmt.Errorf("failed to backfill owner for user %s root folder: %v", u, err)
 		}
 	}
@@ -1120,7 +1120,7 @@ func EnsureFoldersExist(dbPath string, owner string) error {
 		}
 
 		var id int
-		err := RODB.Get(&id, "SELECT id FROM files WHERE path = ? AND filename = ? AND is_folder = 1 AND owner = ?", currentPath, part, owner)
+		err := RODB.Get(&id, "SELECT id FROM files WHERE path = ? AND filename = ? AND is_folder = true AND owner = ?", currentPath, part, owner)
 		if err != nil {
 			var count int
 			if currentPath == "/" {
@@ -1160,7 +1160,7 @@ func EnsureFoldersExistTx(tx *WrappedTx, dbPath string, owner string) error {
 		}
 
 		var id int
-		err := tx.Get(&id, "SELECT id FROM files WHERE path = ? AND filename = ? AND is_folder = 1 AND owner = ? AND deleted_at IS NULL", currentPath, part, owner)
+		err := tx.Get(&id, "SELECT id FROM files WHERE path = ? AND filename = ? AND is_folder = true AND owner = ? AND deleted_at IS NULL", currentPath, part, owner)
 		if err != nil {
 			var count int
 			if currentPath == "/" {

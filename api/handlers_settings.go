@@ -417,8 +417,8 @@ func (h *Handler) handleGetUsers(c *gin.Context) {
 		var fileCount int
 		var totalSize int64
 		owner := users[i].Username
-		database.RODB.Get(&fileCount, "SELECT COUNT(*) FROM files WHERE owner = ? AND is_folder = 0", owner)
-		database.RODB.Get(&totalSize, "SELECT COALESCE(SUM(size), 0) FROM files WHERE owner = ? AND is_folder = 0", owner)
+		database.RODB.Get(&fileCount, "SELECT COUNT(*) FROM files WHERE owner = ? AND is_folder = false", owner)
+		database.RODB.Get(&totalSize, "SELECT COALESCE(SUM(size), 0) FROM files WHERE owner = ? AND is_folder = false", owner)
 		users[i].FileCount = fileCount
 		users[i].TotalSize = totalSize
 	}
@@ -467,9 +467,9 @@ func (h *Handler) handlePostUser(c *gin.Context) {
 	defer tx.Rollback()
 
 	var folderCount int
-	folderQuery := "SELECT COUNT(*) FROM files WHERE path = '/' AND filename = ? COLLATE NOCASE AND is_folder = 1"
+	folderQuery := "SELECT COUNT(*) FROM files WHERE path = '/' AND filename = ? COLLATE NOCASE AND is_folder = true"
 	if database.IsMySQL() || database.IsPostgres() {
-		folderQuery = "SELECT COUNT(*) FROM files WHERE path = '/' AND LOWER(filename) = LOWER(?) AND is_folder = 1"
+		folderQuery = "SELECT COUNT(*) FROM files WHERE path = '/' AND LOWER(filename) = LOWER(?) AND is_folder = true"
 	}
 	err = tx.Get(&folderCount, folderQuery, username)
 	if err != nil {
@@ -534,7 +534,7 @@ func (h *Handler) handleDeleteUser(c *gin.Context) {
 	newFolderName := fmt.Sprintf("deleted_%s_%s", username, timestamp)
 	adminUsername := c.GetString("username")
 
-	_, err = tx.Exec("UPDATE files SET filename = ?, owner = ? WHERE path = '/' AND filename = ? AND is_folder = 1 AND owner = ?", newFolderName, adminUsername, username, username)
+	_, err = tx.Exec("UPDATE files SET filename = ?, owner = ? WHERE path = '/' AND filename = ? AND is_folder = true AND owner = ?", newFolderName, adminUsername, username, username)
 	if err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to rename user folder"})

@@ -684,7 +684,7 @@ func ProcessCompleteUpload(ctx context.Context, filePath, filename, path, mimeTy
 	var existingID int
 	var existingThumb *string
 	if overwrite {
-		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = 0 AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
+		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = false AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
 	}
 
 	// Serialize filename uniqueness check + DB insert to prevent TOCTOU
@@ -1008,7 +1008,7 @@ func ProcessRemoteUpload(ctx context.Context, url, path, taskID string, cfg *con
 	var existingID int
 	var existingThumb *string
 	if overwrite {
-		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = 0 AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
+		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = false AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
 	}
 
 	// Serialize filename uniqueness check + DB insert to prevent TOCTOU races.
@@ -1275,7 +1275,7 @@ func ProcessCompleteUploadSync(ctx context.Context, filePath, filename, path, mi
 	var existingID int
 	var existingThumb *string
 	if overwrite {
-		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = 0 AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
+		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = false AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
 	}
 
 	// Serialize filename uniqueness check + DB insert to prevent TOCTOU races.
@@ -1655,7 +1655,7 @@ func ProcessRemoteUploadSync(ctx context.Context, url, path, taskID string, cfg 
 	var existingID int
 	var existingThumb *string
 	if overwrite {
-		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = 0 AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
+		database.RODB.QueryRow("SELECT id, thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = false AND owner = ?", path, filename, owner).Scan(&existingID, &existingThumb)
 	}
 
 	// Serialize filename uniqueness check + DB insert to prevent TOCTOU races.

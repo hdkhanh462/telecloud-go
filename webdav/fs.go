@@ -110,7 +110,7 @@ func (fs *telecloudFS) Mkdir(ctx context.Context, name string, perm os.FileMode)
 	if dir != "/" {
 		var parent database.File
 		pDir, pBase := splitPath(dir)
-		err := database.RODB.Get(&parent, "SELECT id FROM files WHERE path = ? AND filename = ? AND is_folder = 1 AND owner = ? AND deleted_at IS NULL", pDir, pBase, username)
+		err := database.RODB.Get(&parent, "SELECT id FROM files WHERE path = ? AND filename = ? AND is_folder = true AND owner = ? AND deleted_at IS NULL", pDir, pBase, username)
 		if err != nil {
 			return os.ErrNotExist // maps to 409 Conflict in webdav
 		}
@@ -320,7 +320,7 @@ func (fs *telecloudFS) GetThumbnailPath(ctx context.Context, name string) (strin
 	dir, base := splitPath(dbName)
 
 	var thumbPath *string
-	err := database.RODB.Get(&thumbPath, "SELECT thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = 0 AND owner = ? AND deleted_at IS NULL", dir, base, username)
+	err := database.RODB.Get(&thumbPath, "SELECT thumb_path FROM files WHERE path = ? AND filename = ? AND is_folder = false AND owner = ? AND deleted_at IS NULL", dir, base, username)
 	if err != nil {
 		return "", err
 	}
