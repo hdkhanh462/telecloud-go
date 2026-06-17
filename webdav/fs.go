@@ -116,7 +116,7 @@ func (fs *telecloudFS) Mkdir(ctx context.Context, name string, perm os.FileMode)
 		}
 	}
 
-	_, err := database.DB.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, ?, 1, ?)", base, dir, username)
+	_, err := database.DB.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, ?, ?, ?)", base, dir, true, username)
 	return err
 }
 

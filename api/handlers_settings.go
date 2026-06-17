@@ -502,7 +502,7 @@ func (h *Handler) handlePostUser(c *gin.Context) {
 		return
 	}
 
-	_, err = tx.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, '/', 1, ?)", username, username)
+	_, err = tx.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, '/', ?, ?)", username, true, username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create folder"})
 		return

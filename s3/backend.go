@@ -330,8 +330,8 @@ func (b *TelecloudBackend) PutObject(bucketName, key string, meta map[string]str
 		parentPath := path.Dir(fullPath)
 		folderName := path.Base(fullPath)
 		_, err = database.DB.Exec(
-			database.InsertIgnoreSQL("files", "filename, path, is_folder, owner", "?, ?, 1, ?"),
-			folderName, parentPath, b.username,
+			database.InsertIgnoreSQL("files", "filename, path, is_folder, owner", "?, ?, ?, ?"),
+			folderName, parentPath, true, b.username,
 		)
 		return gofakes3.PutObjectResult{}, err
 	}

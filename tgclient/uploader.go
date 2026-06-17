@@ -696,8 +696,8 @@ func ProcessCompleteUpload(ctx context.Context, filePath, filename, path, mimeTy
 	var dbErr error
 	for i := 0; i < 5; i++ {
 		fileID, dbErr = database.InsertAndGetID(database.DB,
-			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, 0, ?)",
-			uniqueFilename, path, fileSize, mimeType, owner,
+			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, ?, ?)",
+			uniqueFilename, path, fileSize, mimeType, false, owner,
 		)
 		if dbErr == nil {
 			break
@@ -1021,8 +1021,8 @@ func ProcessRemoteUpload(ctx context.Context, url, path, taskID string, cfg *con
 	var dbErr error
 	for i := 0; i < 5; i++ {
 		fileID, dbErr = database.InsertAndGetID(database.DB,
-			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, 0, ?)",
-			uniqueFilename, path, size, mimeType, owner,
+			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, ?, ?)",
+			uniqueFilename, path, size, mimeType, false, owner,
 		)
 		if dbErr == nil {
 			break
@@ -1294,8 +1294,8 @@ func ProcessCompleteUploadSync(ctx context.Context, filePath, filename, path, mi
 	var dbErr error
 	for i := 0; i < 5; i++ {
 		fileID, dbErr = database.InsertAndGetID(database.DB,
-			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, 0, ?)",
-			uniqueFilename, path, fileSize, mimeType, owner,
+			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, ?, ?)",
+			uniqueFilename, path, fileSize, mimeType, false, owner,
 		)
 		if dbErr == nil {
 			break
@@ -1669,8 +1669,8 @@ func ProcessRemoteUploadSync(ctx context.Context, url, path, taskID string, cfg 
 	var dbErr error
 	for i := 0; i < 5; i++ {
 		fileID, dbErr = database.InsertAndGetID(database.DB,
-			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, 0, ?)",
-			uniqueFilename, path, size, mimeType, owner,
+			"INSERT INTO files (filename, path, size, mime_type, is_folder, owner) VALUES (?, ?, ?, ?, ?, ?)",
+			uniqueFilename, path, size, mimeType, false, owner,
 		)
 		if dbErr == nil {
 			break

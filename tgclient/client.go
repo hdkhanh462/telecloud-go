@@ -1210,8 +1210,8 @@ func handleBotNewMessage(ctx context.Context, e tg.Entities, msgClass tg.Message
 	defer tx.Rollback()
 
 	fileID, err := database.InsertAndGetID(tx,
-		"INSERT INTO files (filename, path, size, mime_type, is_folder, owner, message_id) VALUES (?, ?, ?, ?, 0, ?, ?)",
-		uniqueFilename, folderPath, docSize, docMimeType, ownerUsername, newMessageID,
+		"INSERT INTO files (filename, path, size, mime_type, is_folder, owner, message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		uniqueFilename, folderPath, docSize, docMimeType, false, ownerUsername, newMessageID,
 	)
 	_ = fileID // suppress unused warning if InsertAndGetID returns int
 	if err != nil {

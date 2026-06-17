@@ -244,7 +244,7 @@ func (h *Handler) handlePostFolders(c *gin.Context) {
 	}
 
 	uniqueName := database.GetUniqueFilename(database.RODB, dbPath, name, true, 0, username)
-	_, err := database.DB.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, ?, 1, ?)", uniqueName, dbPath, username)
+	_, err := database.DB.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, ?, ?, ?)", uniqueName, dbPath, true, username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -679,7 +679,7 @@ func (h *Handler) handlePostPaste(c *gin.Context) {
 			}
 		case "copy":
 			if item.IsFolder {
-				_, err = tx.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, ?, 1, ?)", uniqueName, req.Destination, username)
+				_, err = tx.Exec("INSERT INTO files (filename, path, is_folder, owner) VALUES (?, ?, ?, ?)", uniqueName, req.Destination, true, username)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 					return
@@ -724,8 +724,8 @@ func (h *Handler) handlePostPaste(c *gin.Context) {
 					continue
 				}
 				newFileID, err := database.InsertAndGetID(tx,
-					"INSERT INTO files (message_id, filename, path, size, mime_type, is_folder, thumb_path, owner) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-					item.MessageID, uniqueName, req.Destination, item.Size, item.MimeType, item.ThumbPath, username)
+					"INSERT INTO files (message_id, filename, path, size, mime_type, is_folder, thumb_path, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+					item.MessageID, uniqueName, req.Destination, item.Size, item.MimeType, false, item.ThumbPath, username)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 					return

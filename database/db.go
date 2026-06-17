@@ -1128,7 +1128,7 @@ func EnsureFoldersExist(dbPath string, owner string) error {
 			}
 
 			if count == 0 {
-				_, err = DB.Exec(InsertIgnoreSQL("files", "filename, path, is_folder, owner", "?, ?, 1, ?"), part, currentPath, owner)
+				_, err = DB.Exec(InsertIgnoreSQL("files", "filename, path, is_folder, owner", "?, ?, ?, ?"), part, currentPath, true, owner)
 				if err != nil {
 					return err
 				}
@@ -1168,7 +1168,7 @@ func EnsureFoldersExistTx(tx *WrappedTx, dbPath string, owner string) error {
 			}
 
 			if count == 0 {
-				_, err = tx.Exec(InsertIgnoreSQL("files", "filename, path, is_folder, owner", "?, ?, 1, ?"), part, currentPath, owner)
+				_, err = tx.Exec(InsertIgnoreSQL("files", "filename, path, is_folder, owner", "?, ?, ?, ?"), part, currentPath, true, owner)
 				if err != nil {
 					return err
 				}
